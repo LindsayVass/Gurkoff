@@ -1,4 +1,4 @@
-function [finalPeakLocs, badEpochs] = interpolateMissingPeaks(maxAutocorr, newPeakLocs, tol)
+function [finalPeakLocs, badEpochs] = interpolateMissingPeaks(waveform, maxAutocorr, newPeakLocs, manualOrAuto, tol)
 % interpolateMissingPeaks - add peaks where they failed to be identified
 % >> finalPeakLocs = interpolateMissingPeaks(waveform, maxAutocorr, newPeakLocs, badPeaks)
 %
@@ -8,6 +8,9 @@ function [finalPeakLocs, badEpochs] = interpolateMissingPeaks(maxAutocorr, newPe
 %   maxAutocorr: expected lag in EEG samples between peaks
 %   newPeakLocs: output of peakFinder containing the indices of waveform
 %       where stimulation peaks are located
+%   manualOrAuto: 'manual' = manually reject questionable stimulation peaks
+%       or 'auto' = automatically reject ALL questionable stimulation peaks
+%       (more conservative, but less time consuming)
 %
 % Optional Input:
 %   tol: (default = 0.01) tolerance for identifying peaks at the expected
@@ -49,14 +52,52 @@ for thisPeak = 1:length(badPeaks)
     
     numMissingInt = abs(round(numMissingPeaks(thisPeak)) - numMissingPeaks(thisPeak));
     
-    if numMissingInt < tol
-        newPeaks = [firstPeak:maxAutocorr:lastPeak]';
-        if lastPeak - newPeaks(end) <= tol * maxAutocorr
-            newPeaks(end) = [];
-        end
-        finalPeakLocs = [finalPeakLocs(1:firstPeakInd); newPeaks; finalPeakLocs(lastPeakInd:end)];
-        finalPeakLocs = unique(finalPeakLocs);
-    else
+    if strcmpi(manualOrAuto, 'auto') == 1
         badEpochs = cat(1, badEpochs, [firstPeak lastPeak]);
+    else
+        
+        if numMissingInt < tol
+            newPeaks = [firstPeak:maxAutocorr:lastPeak]';
+            
+            if lastPeak - newPeaks(end) <= tol * maxAutocorr
+                newPeaks(end) = [];
+            end
+            
+            newPeaksFinal = [];
+            h = plotAllPeaks(waveform, newPeaks, maxAutocorr);
+            prompt = 'Keep or reject peaks?';
+            answer = questdlg(prompt, 'Keep peaks?', 'Keep All', 'Reject All', 'Keep All');
+            
+            if strcmpi(answer, 'Keep All') == 1
+                finalPeakLocs = [finalPeakLocs(1:firstPeakInd); newPeaks; finalPeakLocs(lastPeakInd:end)];
+                finalPeakLocs = unique(finalPeakLocs);
+            else
+                badEpochs = cat(1, badEpochs, [firstPeak lastPeak]);
+            end
+            
+            close(h);
+        else
+            badEpochs = cat(1, badEpochs, [firstPeak lastPeak]);
+        end
     end
 end
+
+function h = plotAllPeaks(waveform, thePeaks, maxAutocorr, plotXBuffer, plotYBuffer)
+
+if ~exist('plotXBuffer', 'var')
+    plotXBuffer = 10;
+end
+
+if ~exist('plotYBuffer', 'var')
+    plotYBuffer = 2;
+end
+
+h = figure;
+plot(waveform);
+hold on;
+
+for i = 1:length(thePeaks)
+    plot(thePeaks, waveform(thePeaks), 'k^', 'markerfacecolor', [1 0 0]);
+end
+hold off;
+axis([thePeaks(1) - plotXBuffer * maxAutocorr thePeaks(end) + plotXBuffer * maxAutocorr mean(waveform) - plotYBuffer*std(waveform) inf])
