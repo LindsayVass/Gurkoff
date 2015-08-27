@@ -63,7 +63,6 @@ for thisPeak = 1:length(badPeaks)
                 newPeaks(end) = [];
             end
             
-            newPeaksFinal = [];
             h = plotAllPeaks(waveform, newPeaks, maxAutocorr);
             prompt = 'Keep or reject peaks?';
             answer = questdlg(prompt, 'Keep peaks?', 'Keep All', 'Reject All', 'Keep All');
