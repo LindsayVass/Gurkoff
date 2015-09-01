@@ -1,13 +1,22 @@
-function [newWaveform, badEpochs, stimEpochs] = removeStimArtifact(waveform, stimFreq, samplingRate, autocorrBuffer, stimBuffer)
+function [newWaveform, badEpochs, stimEpochs] = removeStimArtifact(fileName, waveform, stimFreq, samplingRate, manualOrAuto, preSpike, postSpike, autocorrBuffer, stimBuffer)
 % removeStimArtifact - remove stimulation artifact using the method in
 %   Wichmann (2000) J Neurosci Methods
 % >> newWaveform = removeStimArtifact(waveform, stim_freq, samplingRate)
 %
 % Inputs:
+%   fileName: short name of the recording being analyzed; this is only used
+%       to label figures
 %   waveform: raw signal containing the data from which the artifact is to
 %       be removed
 %   stim_freq: frequency in Hz of the stimulation
 %   samplingRate: frequency in Hz of the recording sampling rate
+%   manualOrAuto: 'manual' = manually reject questionable stimulation peaks
+%       or 'auto' = automatically reject ALL questionable stimulation peaks
+%       (more conservative, but less time consuming)
+%   preSpike: number of samples before the identified stimulation peak to
+%       include in interpolation (suggested = 3)
+%   postSpike: number of samples after the identified stimulation peak to
+%       include in interpolation (suggested = 12)
 %
 % Optional Input:
 %   autocorrBuffer: (default = 50) number of lags to test above and below the
@@ -15,7 +24,7 @@ function [newWaveform, badEpochs, stimEpochs] = removeStimArtifact(waveform, sti
 %       7.7 Hz and samplingRate = 1000 Hz, the expected lag is 130 samples
 %       between stimulation peaks. A buffer of 50 will test lags of 80 -
 %       180 samples.
-%   stimBuffer: (default = 10) number of samples before and after
+%   stimBuffer: (default = 100) number of samples before and after
 %       stimulation peak to include in calculation to remove stimulation
 %       artifact
 %
@@ -39,7 +48,7 @@ if ~exist('autocorrBuffer', 'var')
 end
 
 if ~exist('stimBuffer', 'var')
-    stimBuffer = 10;
+    stimBuffer = 100;
 end
 
 % expected lag in samples
@@ -70,8 +79,14 @@ newPeakLocs = peakFinder(waveform, maxAutocorr, peakLocs, 'first');
 newPeakLocs = peakFinder(waveform, maxAutocorr, newPeakLocs, 'last');
 
 % handle peaks separated by more than expAutocorr
-[finalPeakLocs, badEpochs] = interpolateMissingPeaks(maxAutocorr, newPeakLocs);
+[finalPeakLocs, badEpochs] = interpolateMissingPeaks(waveform, maxAutocorr, newPeakLocs, manualOrAuto);
 
+% report how much data is excluded
+badTime = sum(badEpochs(:, 2) - badEpochs(:, 1)) / samplingRate;
+totTime = length(waveform) / samplingRate;
+badPct  = (badTime / totTime) * 100;
+
+warning(['Excluding ' num2str(badTime) ' seconds of data, ' num2str(badPct) '% of total data.'])
 
 %% remove artifact
 
@@ -79,8 +94,35 @@ newPeakLocs = peakFinder(waveform, maxAutocorr, newPeakLocs, 'last');
 stimInds  = repmat(finalPeakLocs, [1, stimBuffer * 2 + 1]);
 sampShift = repmat([-stimBuffer:stimBuffer], [size(stimInds, 1), 1]);
 stimInds  = stimInds + sampShift;
+stimInds(stimInds > length(waveform)) = length(waveform);
 stimData  = waveform(stimInds);
 
-% shift stimulations in time to identify max correlation with meanStim
-[shiftedStimData, timeShifts] = shiftStim(stimData, meanStim);
+startInterp = stimBuffer - preSpike;
+stopInterp  = stimBuffer + postSpike;
 
+deSpikedData = zeros(size(stimData));
+for thisSpike = 1:size(deSpikedData, 1)
+    thisData = stimData(thisSpike, :);
+    x  = [1:startInterp stopInterp:length(thisData)];
+    y  = thisData(x);
+    xq = [startInterp + 1:stopInterp - 1];
+    yq = interp1(x, y, xq, 'pchip');
+    deSpikedData(thisSpike, :) = [thisData(1:startInterp) yq thisData(stopInterp:end)];    
+end
+
+% plot a few example spikes
+spikeList = randsample(size(stimData, 1), 9);
+figure;
+for i = 1:length(spikeList)
+    subplot(3, 3, i);
+    plot(stimData(i, :));
+    hold on;
+    plot(deSpikedData(i, :), 'r');
+    set(gca, 'xlim', [1 stimBuffer*2]);
+end
+suptitle({['Example artifact removals for ' fileName ], 'Blue = Before    Red = After'});
+
+newWaveform = waveform;
+newWaveform(stimInds) = deSpikedData;
+
+stimEpochs = [finalPeakLocs - preSpike, finalPeakLocs + postSpike];
