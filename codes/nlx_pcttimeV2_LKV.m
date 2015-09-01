@@ -11,6 +11,15 @@ wavelet_cycles = 6;
 duration = 3;
 srate = 1000;
 
+% stimulation artifact removal parameters
+stim_freq      = 7.7; % Hz
+manualOrAuto   = 'auto'; % either 'manual' which is time consuming, but retains more data; or 'auto', which is fast, but throws out a lot of data
+preSpike       = 3;
+postSpike      = 12;
+autocorrBuffer = 50;
+stimBuffer     = 100;
+saveFile       = '/Path/to/save/artifact/info.mat'; % will save file info, analyzed samples, waveforms before and after artifact removal, indices of bad epochs, and indices of stimulation epochs
+
 Automatic_Start_Input = false;    %Allows the EEG start times to be entered automaticly (Line: )
 %end user defined inputs
 
@@ -36,6 +45,7 @@ if Automatic_Start_Input
 end
 
 removeStim = zeros(file_total, 1);
+manualAutoRemove = cell(file_total, 1);
 for I = 1:file_total
     %Load File
     file_to_analyze = files(I).name;
@@ -115,6 +125,8 @@ for I = 1:file_total
     removeCheck = questdlg(['Do you want to remove stimulation artifacts from ' file_to_analyze]);
     if strcmpi(removeCheck, 'Yes') == 1
         removeStim(I) = 1;
+        autoRemoveCheck = questdlg(['Do you want to remove artifacts automatically (takes less time, but throws out more data) or manually (time consuming, but less conservative) for ' file_to_analyze '?'], 'Rejection Type', 'Manual', 'Auto', 'Auto');
+        manualAutoRemove{I} = autoRemoveCheck;
     end
     
     clear End_Temp_Array
@@ -163,13 +175,44 @@ end
 predata = cell2struct(Waveform_Index', flds, 1);
     
 clearvars W_Temp
+allBadEpochs  = cell(file_total, 1);
+allStimEpochs = cell(file_total, 1);
+NewWaveforms  = Waveform;
+OrigWaveform  = Waveform;
+allSamples    = cell(file_total, 1);
     
 for iFile = 1:file_total %should loop through timestamped session folders   
     %% % ------------------------- File Analysis ------------------------- % %%
     
+    file_to_analyze = files(iFile).name;
+    short_fname = strtok(file_to_analyze,'.');
+    
     %convert time in seconds to samples
     %ajw 5-9-13
     samples = [time_frames{iFile,2}*srate:time_frames{iFile,3}*srate];
+    samples(samples == 0) = [];
+    allSamples{iFile} = samples;
+    
+    % remove stimulation artifact
+    if removeStim(iFile) == 1
+       [newWaveform, badEpochs, stimEpochs] = removeStimArtifact(short_fname, Waveform(samples, iFile), stim_freq, srate, manualAutoRemove{iFile}, preSpike, postSpike, autocorrBuffer, stimBuffer);
+       
+       Waveform(samples, iFile)     = newWaveform;
+       NewWaveforms(samples, iFile) = newWaveform;
+       allBadEpochs{iFile}          = badEpochs;
+       allStimEpochs{iFile}         = stimEpochs;
+       
+       figure;
+       hold on;
+       plot(OrigWaveform(samples, iFile));
+       plot(Waveform(samples, iFile), 'r');
+       for thisBadEpoch = 1:size(badEpochs, 1)
+           x = [badEpochs(thisBadEpoch, 1):badEpochs(thisBadEpoch, 2)];
+           plot(x, repmat(max(Waveform(samples, iFile)), [length(x), 1]), 'k^', 'markerfacecolor', 'k')
+       end
+       title({['Stimulation Artifact Removal for ' short_fname], 'Blue = Before', 'Red = After', 'Black Triangles = Excluded Data Segments'});
+    end
+    
     for channel=1
         %% % ------------------------- Colin Edit ------------------------ % %%
         
@@ -226,14 +269,21 @@ for iFile = 1:file_total %should loop through timestamped session folders
         end
         %
         
+        for thisBadEpoch = 1:size(badEpochs, 1)
+            Binary_matrix(:, badEpochs(thisBadEpoch, 1):badEpochs(thisBadEpoch, 2)) = NaN;
+        end
+        
         %percentage time
-        Percenttime(:,channel,iFile) = (sum(Binary_matrix,2)./size(Binary_matrix,2)).*100; %2 is the sum across the second dimension
+        Percenttime(:,channel,iFile) = (nansum(Binary_matrix,2)./size(Binary_matrix,2)).*100; %2 is the sum across the second dimension
         
         %added ajw 6-12-13
-        tmp_freq_bin_pct_time = sum(Binary_matrix,1);
+        tmp_freq_bin_pct_time = nansum(Binary_matrix,1);
         tmp_freq_bin_pct_time(tmp_freq_bin_pct_time>1) = 1;
         freq_bin_pct_time(iFile,1) = (sum(tmp_freq_bin_pct_time)./length(tmp_freq_bin_pct_time))*100;
         clear tmp*
     end
     clear samples
 end
+
+
+save(saveFile, 'files', 'OrigWaveform', 'NewWaveforms', 'allSamples', 'allBadEpochs', 'allStimEpochs');
